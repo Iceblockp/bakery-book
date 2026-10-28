@@ -1,0 +1,216 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+const sharp = require("sharp");
+const fs = require("fs");
+const path = require("path");
+
+const publicIconsDir = path.join(__dirname, "../public/icons");
+if (!fs.existsSync(publicIconsDir)) {
+  fs.mkdirSync(publicIconsDir, { recursive: true });
+}
+
+// 1. Vector SVG for standard icon (512x512 with squircle / rounded corner option or full background)
+function createSvg(isMaskable = false) {
+  // Safe zone for maskable is inside 66% circle (radius ~170px from center 256, 256)
+  const scale = isMaskable ? 0.78 : 1.0;
+  const radius = isMaskable ? 0 : 115;
+
+  return `
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+    <defs>
+      <!-- Background gradient: deep warm roasted baker's brown -->
+      <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#734a32" />
+        <stop offset="45%" stop-color="#542e1d" />
+        <stop offset="100%" stop-color="#34180d" />
+      </linearGradient>
+
+      <!-- Warm gold accent gradient -->
+      <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#ffd599" />
+        <stop offset="50%" stop-color="#f5a65b" />
+        <stop offset="100%" stop-color="#df7d2a" />
+      </linearGradient>
+
+      <!-- Bread crust gradient -->
+      <linearGradient id="breadCrust" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="#f8be76" />
+        <stop offset="35%" stop-color="#e38c40" />
+        <stop offset="70%" stop-color="#b6571b" />
+        <stop offset="100%" stop-color="#7a300a" />
+      </linearGradient>
+
+      <!-- Crumb / scored bread interior glow -->
+      <linearGradient id="crumbGlow" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="#fff5e6" />
+        <stop offset="100%" stop-color="#ffd699" />
+      </linearGradient>
+
+      <!-- Badge subtle rim -->
+      <radialGradient id="rimGlow" cx="50%" cy="40%" r="60%">
+        <stop offset="0%" stop-color="#fff" stop-opacity="0.18" />
+        <stop offset="100%" stop-color="#fff" stop-opacity="0" />
+      </radialGradient>
+
+      <!-- Drop shadow for main bread motif -->
+      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#140803" flood-opacity="0.55" />
+      </filter>
+
+      <!-- Soft glow for highlights -->
+      <filter id="flourDust" x="-10%" y="-10%" width="120%" height="120%">
+        <feGaussianBlur stdDeviation="3" />
+      </filter>
+    </defs>
+
+    <!-- Base Canvas -->
+    <rect width="512" height="512" rx="${radius}" fill="url(#bgGrad)" />
+    <rect width="512" height="512" rx="${radius}" fill="url(#rimGlow)" />
+
+    <!-- Outer Decorative Emblem Circles -->
+    <circle cx="256" cy="256" r="218" fill="none" stroke="#e8c8b3" stroke-opacity="0.12" stroke-width="2" />
+    <circle cx="256" cy="256" r="202" fill="none" stroke="#e8c8b3" stroke-opacity="0.22" stroke-width="1.5" stroke-dasharray="6 8" />
+
+    <!-- Main Content Group (scaled for maskable if needed) -->
+    <g transform="translate(256 256) scale(${scale}) translate(-256 -256)">
+
+      <!-- Wheat sprigs flanking the base -->
+      <g stroke="url(#goldGrad)" stroke-width="2.8" stroke-linecap="round" fill="none" opacity="0.85">
+        <!-- Left wheat arc -->
+        <path d="M 120 340 C 130 380, 180 405, 230 408" />
+        <!-- Left wheat grains -->
+        <ellipse cx="145" cy="356" rx="8" ry="4" transform="rotate(-35 145 356)" fill="#f5a65b" />
+        <ellipse cx="170" cy="376" rx="9" ry="4.5" transform="rotate(-20 170 376)" fill="#f5a65b" />
+        <ellipse cx="198" cy="394" rx="9" ry="4.5" transform="rotate(-5 198 394)" fill="#f5a65b" />
+
+        <!-- Right wheat arc -->
+        <path d="M 392 340 C 382 380, 332 405, 282 408" />
+        <!-- Right wheat grains -->
+        <ellipse cx="367" cy="356" rx="8" ry="4" transform="rotate(35 367 356)" fill="#f5a65b" />
+        <ellipse cx="342" cy="376" rx="9" ry="4.5" transform="rotate(20 342 376)" fill="#f5a65b" />
+        <ellipse cx="314" cy="394" rx="9" ry="4.5" transform="rotate(5 314 394)" fill="#f5a65b" />
+      </g>
+
+      <!-- Center Star / Grain Tie -->
+      <circle cx="256" cy="408" r="4.5" fill="#ffd599" />
+
+      <!-- Bread Loaf Base Drop Shadow -->
+      <ellipse cx="256" cy="342" rx="142" ry="26" fill="#150804" opacity="0.6" filter="url(#shadow)" />
+
+      <!-- Artisan Sourdough Loaf Silhouette -->
+      <g filter="url(#shadow)">
+        <!-- Lower loaf body -->
+        <path d="
+          M 134 290
+          C 126 220, 180 150, 256 150
+          C 332 150, 386 220, 378 290
+          C 374 332, 340 345, 256 345
+          C 172 345, 138 332, 134 290 Z"
+          fill="url(#breadCrust)"
+        />
+
+        <!-- Top Crust Oven-Spring Highlight -->
+        <path d="
+          M 148 270
+          C 142 215, 188 158, 256 158
+          C 324 158, 370 215, 364 270
+          C 340 230, 305 200, 256 200
+          C 207 200, 172 230, 148 270 Z"
+          fill="#ffdfad"
+          opacity="0.32"
+          filter="url(#flourDust)"
+        />
+
+        <!-- Artisan Baker's Score Cut (Signature Sourdough Slit) -->
+        <!-- Deep scored opening -->
+        <path d="
+          M 174 250
+          C 205 208, 307 208, 338 250
+          C 310 232, 202 232, 174 250 Z"
+          fill="#541e06"
+        />
+
+        <!-- Freshly baked golden interior crumb exposed in score cut -->
+        <path d="
+          M 180 248
+          C 210 215, 302 215, 332 248
+          C 305 236, 207 236, 180 248 Z"
+          fill="url(#crumbGlow)"
+        />
+
+        <!-- Secondary artisan cross-scores -->
+        <path d="M 216 195 Q 230 218 226 230" stroke="#ffd9a6" stroke-width="4" stroke-linecap="round" fill="none" opacity="0.9" />
+        <path d="M 256 182 Q 262 208 258 225" stroke="#ffd9a6" stroke-width="4.5" stroke-linecap="round" fill="none" opacity="0.95" />
+        <path d="M 296 195 Q 290 218 288 230" stroke="#ffd9a6" stroke-width="4" stroke-linecap="round" fill="none" opacity="0.9" />
+
+        <!-- Warm golden steam wisps rising from fresh hot bread -->
+        <g stroke="#ffebd0" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.55">
+          <path d="M 226 130 C 220 115, 232 105, 226 90" />
+          <path d="M 256 122 C 250 107, 262 97, 256 82" stroke-width="3.5" opacity="0.75" />
+          <path d="M 286 130 C 280 115, 292 105, 286 90" />
+        </g>
+      </g>
+
+      <!-- Elegant Brand Banner Ribbon / Monogram Badge -->
+      <g filter="url(#shadow)">
+        <!-- Ribbon badge backing -->
+        <rect x="216" y="322" width="80" height="42" rx="12" fill="#e76f51" stroke="#fff" stroke-width="2" />
+        <!-- Letter "B" in clean, bold, warm typography -->
+        <text x="256" y="352" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Georgia, serif" font-size="26" font-weight="900" fill="#ffffff" text-anchor="middle">B</text>
+      </g>
+
+    </g>
+  </svg>
+  `.trim();
+}
+
+async function generate() {
+  const standardSvg = Buffer.from(createSvg(false));
+  const maskableSvg = Buffer.from(createSvg(true));
+
+  console.log("Generating Bakery Book PWA icons...");
+
+  // 1. icon-512.png
+  await sharp(standardSvg).resize(512, 512).png().toFile(path.join(publicIconsDir, "icon-512.png"));
+  console.log("✓ Created public/icons/icon-512.png");
+
+  // 2. icon-192.png
+  await sharp(standardSvg).resize(192, 192).png().toFile(path.join(publicIconsDir, "icon-192.png"));
+  console.log("✓ Created public/icons/icon-192.png");
+
+  // 3. icon-maskable-512.png
+  await sharp(maskableSvg).resize(512, 512).png().toFile(path.join(publicIconsDir, "icon-maskable-512.png"));
+  console.log("✓ Created public/icons/icon-maskable-512.png");
+
+  // 4. icon-maskable-192.png
+  await sharp(maskableSvg).resize(192, 192).png().toFile(path.join(publicIconsDir, "icon-maskable-192.png"));
+  console.log("✓ Created public/icons/icon-maskable-192.png");
+
+  // 5. apple-touch-icon.png (180x180)
+  await sharp(standardSvg).resize(180, 180).png().toFile(path.join(publicIconsDir, "apple-touch-icon.png"));
+  console.log("✓ Created public/icons/apple-touch-icon.png");
+
+  // 6. favicon-32x32.png
+  await sharp(standardSvg).resize(32, 32).png().toFile(path.join(publicIconsDir, "favicon-32x32.png"));
+  console.log("✓ Created public/icons/favicon-32x32.png");
+
+  // 7. favicon-16x16.png
+  await sharp(standardSvg).resize(16, 16).png().toFile(path.join(publicIconsDir, "favicon-16x16.png"));
+  console.log("✓ Created public/icons/favicon-16x16.png");
+
+  // 8. favicon.ico replacement
+  const favicon32 = await sharp(standardSvg).resize(32, 32).png().toBuffer();
+  fs.writeFileSync(path.join(__dirname, "../src/app/favicon.ico"), favicon32);
+  fs.writeFileSync(path.join(__dirname, "../public/favicon.ico"), favicon32);
+  console.log("✓ Replaced favicon.ico");
+
+  // Save standard SVG
+  fs.writeFileSync(path.join(publicIconsDir, "icon.svg"), standardSvg);
+  console.log("✓ Saved public/icons/icon.svg");
+
+  console.log("All icons successfully generated!");
+}
+
+generate().catch((err) => {
+  console.error("Error generating icons:", err);
+  process.exit(1);
+});
