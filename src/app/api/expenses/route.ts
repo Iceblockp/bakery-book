@@ -8,7 +8,12 @@ export async function GET(request: Request) {
   await connection();
   try {
     const { supabase } = await createAuthenticatedClient(request);
-    const { data, error } = await supabase.from("expenses").select("*").order("expense_date", { ascending: false }).limit(100);
+    const { data, error } = await supabase
+      .from("expenses")
+      .select("*")
+      .order("expense_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(100);
     if (error) throw new ApiError(error.message, 400);
     return Response.json({ expenses: data ?? [] });
   } catch (error) {

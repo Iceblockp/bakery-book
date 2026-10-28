@@ -1,5 +1,24 @@
 import { ApiError, asPositiveNumber, asString, errorResponse, readJson } from "@/lib/api";
 import { createAuthenticatedClient } from "@/lib/supabase/server";
+import { connection } from "next/server";
+
+export async function GET(request: Request) {
+  await connection();
+  try {
+    const { supabase } = await createAuthenticatedClient(request);
+    const { data, error } = await supabase
+      .from("purchases")
+      .select("id, total_amount_mmk, purchase_date, supplier_name, note, reversed_at, reversal_note, created_at, purchase_items(id, quantity, unit_cost_mmk, ingredients(id, name, base_unit))")
+      .order("purchase_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) throw new ApiError(error.message, 400);
+    return Response.json({ purchases: data ?? [] });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
 
 export async function POST(request: Request) {
   try {
