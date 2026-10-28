@@ -2,6 +2,7 @@
 
 import type { Session } from "@supabase/supabase-js";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getBrowserSupabase } from "@/lib/supabase/browser";
 
 type View = "home" | "sell" | "bake" | "stock" | "purchase" | "catalog" | "recipes" | "adjust" | "history" | "expense" | "reports" | "reset" | "more";
@@ -223,14 +224,37 @@ function Icon({ name, size = 21 }: { name: IconName; size?: number }) {
 
 export default function Home() {
   const [session, setSession] = useState<Session | null>();
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            staleTime: 60 * 1000, // Data remains fresh for 1 minute (instant 0ms view navigation)
+            gcTime: 10 * 60 * 1000, // Unused cached data stays in memory for 10 minutes
+            refetchOnWindowFocus: false,
+            retry: 1,
+          },
+        },
+      })
+  );
+
   useEffect(() => {
-    const { data } = getBrowserSupabase().auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
+    const { data } = getBrowserSupabase().auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      if (!nextSession) {
+        queryClient.clear();
+      }
+    });
     return () => data.subscription.unsubscribe();
-  }, []);
+  }, [queryClient]);
 
   if (session === undefined) return <LoadingScreen />;
   if (!session) return <LoginScreen />;
-  return <BakeryApp session={session} />;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BakeryApp session={session} />
+    </QueryClientProvider>
+  );
 }
 
 function LoadingScreen() {
@@ -255,18 +279,11 @@ function LoginScreen() {
 }
 
 function BakeryApp({ session }: { session: Session }) {
+  const queryClient = useQueryClient();
   const [view, setView] = useState<View>(getInitialView);
   const [navSource, setNavSource] = useState<Record<string, View>>({});
   const [cart, setCart] = useState<Record<string, number>>({});
   const [stockTab, setStockTab] = useState<StockTab>("raw");
-  const [products, setProducts] = useState<Product[]>([]);
-  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
-  const [finishedStock, setFinishedStock] = useState<FinishedStock[]>([]);
-  const [movements, setMovements] = useState<StockMovement[]>([]);
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
-  const [dashboard, setDashboard] = useState(emptyDashboard);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const token = session.access_token;
 
@@ -298,31 +315,44 @@ function BakeryApp({ session }: { session: Session }) {
     navigate(previous);
   }, [navSource, view, navigate]);
 
-  const refreshData = useCallback(async () => {
-    try {
+  const {
+    data: bakeryData,
+    isLoading: loading,
+    error: loadError,
+  } = useQuery({
+    queryKey: ["bakery-data"],
+    queryFn: async () => {
       const [catalog, stock, dashboardResult] = await Promise.all([
         apiRequest<{ products: Array<Record<string, unknown>>; recipes: Array<Record<string, unknown>> }>("/api/catalog", token),
         apiRequest<{ raw: Array<Record<string, unknown>>; finished: Array<Record<string, unknown>>; movements: StockMovement[] }>("/api/stock", token),
         apiRequest<{ today: DashboardData }>("/api/dashboard", token),
       ]);
       const finished = stock.finished.map((item) => ({ id: String(item.product_id), name: String(item.name), quantity: Number(item.quantity), price: Number(item.selling_price_mmk), lowThreshold: Number(item.low_stock_threshold), isLow: Boolean(item.is_low) }));
-      setFinishedStock(finished);
-      setProducts(catalog.products.map((item, index) => ({ id: String(item.id), name: String(item.name), price: Number(item.selling_price_mmk), stock: finished.find((row) => row.id === item.id)?.quantity ?? 0, emoji: productEmoji[index % productEmoji.length] })));
-      setRecipes(catalog.recipes.map((item) => ({ id: String(item.id), name: String(item.name), productId: String(item.product_id), expectedYield: Number(item.expected_yield), version: Number(item.version), items: ((item.recipe_items as Array<Record<string, unknown>>) || []).map((recipeItem) => ({ ingredientId: String(recipeItem.ingredient_id), quantity: Number(recipeItem.quantity) })) })));
-      setIngredients(stock.raw.map((item) => ({ id: String(item.ingredient_id), name: String(item.name), unit: String(item.base_unit), quantity: Number(item.quantity), lowThreshold: Number(item.low_stock_threshold), isLow: Boolean(item.is_low) })));
-      setMovements(stock.movements || []);
-      setDashboard(dashboardResult.today);
-      setError("");
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Could not load bakery data");
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
+      const prods = catalog.products.map((item, index) => ({ id: String(item.id), name: String(item.name), price: Number(item.selling_price_mmk), stock: finished.find((row) => row.id === item.id)?.quantity ?? 0, emoji: productEmoji[index % productEmoji.length] }));
+      const recs = catalog.recipes.map((item) => ({ id: String(item.id), name: String(item.name), productId: String(item.product_id), expectedYield: Number(item.expected_yield), version: Number(item.version), items: ((item.recipe_items as Array<Record<string, unknown>>) || []).map((recipeItem) => ({ ingredientId: String(recipeItem.ingredient_id), quantity: Number(recipeItem.quantity) })) }));
+      const ings = stock.raw.map((item) => ({ id: String(item.ingredient_id), name: String(item.name), unit: String(item.base_unit), quantity: Number(item.quantity), lowThreshold: Number(item.low_stock_threshold), isLow: Boolean(item.is_low) }));
+      return {
+        products: prods,
+        ingredients: ings,
+        finishedStock: finished,
+        recipes: recs,
+        movements: stock.movements || [],
+        dashboard: dashboardResult.today,
+      };
+    },
+  });
 
-  // Loading authenticated data is the external synchronization performed here.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void refreshData(); }, [refreshData]);
+  const products = useMemo(() => bakeryData?.products || [], [bakeryData?.products]);
+  const ingredients = useMemo(() => bakeryData?.ingredients || [], [bakeryData?.ingredients]);
+  const finishedStock = useMemo(() => bakeryData?.finishedStock || [], [bakeryData?.finishedStock]);
+  const recipes = useMemo(() => bakeryData?.recipes || [], [bakeryData?.recipes]);
+  const movements = useMemo(() => bakeryData?.movements || [], [bakeryData?.movements]);
+  const dashboard = bakeryData?.dashboard || emptyDashboard;
+  const error = loadError instanceof Error ? loadError.message : "";
+
+  const refreshData = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: ["bakery-data"] });
+  }, [queryClient]);
   const cartCount = Object.values(cart).reduce((sum, count) => sum + count, 0);
   const cartTotal = useMemo(() => products.reduce((sum, product) => sum + product.price * (cart[product.id] || 0), 0), [cart, products]);
   const activeView: View = ["catalog", "recipes", "history", "expense", "reports", "reset"].includes(view) ? "more" : ["purchase", "adjust"].includes(view) ? "stock" : view;
@@ -1110,9 +1140,15 @@ function Bake({
   onRecipes: () => void;
   onSaved: () => Promise<void>;
 }) {
+  const queryClient = useQueryClient();
   const [mode, setMode] = useState<"list" | "create">("list");
-  const [batches, setBatches] = useState<BatchRecord[]>([]);
-  const [loadingBatches, setLoadingBatches] = useState(true);
+  const { data: batches = [], isLoading: loadingBatches } = useQuery({
+    queryKey: ["batches"],
+    queryFn: async () => {
+      const res = await apiRequest<{ batches: BatchRecord[] }>("/api/batches", token);
+      return res.batches || [];
+    },
+  });
   const [selectedBatch, setSelectedBatch] = useState<BatchRecord | null>(null);
   const [reversingBatch, setReversingBatch] = useState<BatchRecord | null>(null);
   const [reversalReason, setReversalReason] = useState("");
@@ -1128,22 +1164,6 @@ function Bake({
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-
-  const loadBatches = useCallback(async () => {
-    try {
-      const res = await apiRequest<{ batches: BatchRecord[] }>("/api/batches", token);
-      setBatches(res.batches || []);
-    } catch {
-      // Non-fatal, keep existing state
-    } finally {
-      setLoadingBatches(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadBatches();
-  }, [loadBatches]);
 
   const selectedProductId = productId || products[0]?.id || "";
   const recipe = recipes.find((item) => item.productId === selectedProductId);
@@ -1187,8 +1207,8 @@ function Bake({
           note,
         }),
       });
+      await queryClient.invalidateQueries({ queryKey: ["batches"] });
       await onSaved();
-      await loadBatches();
       setMode("list");
       setGood("");
       setWaste("0");
@@ -1214,8 +1234,8 @@ function Bake({
           note: reversalReason.trim(),
         }),
       });
+      await queryClient.invalidateQueries({ queryKey: ["batches"] });
       await onSaved();
-      await loadBatches();
       setSelectedBatch(null);
       setReversingBatch(null);
       setReversalReason("");
@@ -2836,10 +2856,16 @@ function Purchase({
   onBack?: () => void;
   onSaved: () => Promise<void>;
 }) {
+  const queryClient = useQueryClient();
   const handleBack = onBack || onCancel;
   const [mode, setMode] = useState<"list" | "create">("list");
-  const [purchases, setPurchases] = useState<PurchaseRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: purchases = [], isLoading: loading } = useQuery({
+    queryKey: ["purchases"],
+    queryFn: async () => {
+      const res = await apiRequest<{ purchases: PurchaseRecord[] }>("/api/purchases", token);
+      return res.purchases || [];
+    },
+  });
   const [search, setSearch] = useState("");
   const [selectedPurchase, setSelectedPurchase] = useState<PurchaseRecord | null>(null);
 
@@ -2858,22 +2884,6 @@ function Purchase({
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-
-  const loadPurchases = useCallback(async () => {
-    try {
-      const res = await apiRequest<{ purchases: PurchaseRecord[] }>("/api/purchases", token);
-      setPurchases(res.purchases || []);
-    } catch {
-      // Keep existing state
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadPurchases();
-  }, [loadPurchases]);
 
   const selectedIngredientId = ingredientId || ingredients[0]?.id || "";
   const selectedIngredient = ingredients.find((item) => item.id === selectedIngredientId);
@@ -2896,8 +2906,8 @@ function Purchase({
           note: note.trim() || undefined,
         }),
       });
+      await queryClient.invalidateQueries({ queryKey: ["purchases"] });
       await onSaved();
-      await loadPurchases();
       setQuantity("");
       setTotalPaid("");
       setSupplierName("");
@@ -2923,8 +2933,8 @@ function Purchase({
           note: reversalReason.trim(),
         }),
       });
+      await queryClient.invalidateQueries({ queryKey: ["purchases"] });
       await onSaved();
-      await loadPurchases();
       setSelectedPurchase(null);
       setReversing(false);
       setReversalReason("");
@@ -3426,10 +3436,16 @@ function Expense({
   onBack?: () => void;
   onSaved: () => Promise<void> | void;
 }) {
+  const queryClient = useQueryClient();
   const handleBack = onBack || onCancel;
   const [mode, setMode] = useState<"list" | "create">("list");
-  const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: expenses = [], isLoading: loading } = useQuery({
+    queryKey: ["expenses"],
+    queryFn: async () => {
+      const res = await apiRequest<{ expenses: ExpenseRecord[] }>("/api/expenses", token);
+      return res.expenses || [];
+    },
+  });
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [selectedExpense, setSelectedExpense] = useState<ExpenseRecord | null>(null);
 
@@ -3447,22 +3463,6 @@ function Expense({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const loadExpenses = useCallback(async () => {
-    try {
-      const res = await apiRequest<{ expenses: ExpenseRecord[] }>("/api/expenses", token);
-      setExpenses(res.expenses || []);
-    } catch {
-      // Non-fatal, keep existing state
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadExpenses();
-  }, [loadExpenses]);
-
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -3477,8 +3477,8 @@ function Expense({
           description: description.trim() || undefined,
         }),
       });
+      await queryClient.invalidateQueries({ queryKey: ["expenses"] });
       await onSaved();
-      await loadExpenses();
       setAmount("");
       setDescription("");
       setMode("list");
@@ -3502,8 +3502,8 @@ function Expense({
           note: reversalReason.trim(),
         }),
       });
+      await queryClient.invalidateQueries({ queryKey: ["expenses"] });
       await onSaved();
-      await loadExpenses();
       setSelectedExpense(null);
       setReversing(false);
       setReversalReason("");
@@ -3916,21 +3916,32 @@ function Expense({
 }
 
 function Reports({ token, backLabel, onBack }: { token: string; backLabel?: string; onBack?: () => void }) {
-  const [period, setPeriod] = useState<"today" | "week" | "month">("week"); const [report, setReport] = useState<ReportData>(); const [error, setError] = useState("");
-  useEffect(() => { let active = true; apiRequest<ReportData>(`/api/reports?period=${period}`, token).then((data) => { if (active) { setReport(data); setError(""); } }).catch((loadError) => { if (active) setError(loadError instanceof Error ? loadError.message : "Could not load report"); }); return () => { active = false; }; }, [period, token]);
+  const [period, setPeriod] = useState<"today" | "week" | "month">("week");
+  const { data: report, isLoading, error: reportError } = useQuery({
+    queryKey: ["reports", period],
+    queryFn: () => apiRequest<ReportData>(`/api/reports?period=${period}`, token),
+  });
+  const error = reportError instanceof Error ? reportError.message : "";
   const activity = report ? [...report.activity.sales.map((item) => ({ id: item.id, date: item.sold_at, label: "Sale", detail: "Money received", amount: Number(item.total_amount_mmk), income: true })), ...report.activity.purchases.map((item) => ({ id: item.id, date: item.purchase_date, label: "Ingredient purchase", detail: item.supplier_name || item.note || "Stock purchase", amount: Number(item.total_amount_mmk), income: false })), ...report.activity.expenses.map((item) => ({ id: item.id, date: item.expense_date, label: item.category.replace(/^./, (letter) => letter.toUpperCase()), detail: item.description || "Business expense", amount: Number(item.amount_mmk), income: false }))].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 12) : [];
-  return <div className="page reports-page"><PageHeading eyebrow="Financial account" title="Reports" onBack={onBack} backLabel={backLabel || "Back to More"} action={onBack ? <button type="button" className="text-button" onClick={onBack}>Done</button> : undefined}/><div className="tabs report-tabs"><button className={period === "today" ? "active" : ""} onClick={() => { setReport(undefined); setPeriod("today"); }}>Today</button><button className={period === "week" ? "active" : ""} onClick={() => { setReport(undefined); setPeriod("week"); }}>7 days</button><button className={period === "month" ? "active" : ""} onClick={() => { setReport(undefined); setPeriod("month"); }}>30 days</button></div>{error && <p className="form-error">{error}</p>}{!report && !error ? <div className="report-loading">Calculating report…</div> : report && <><section className="report-hero"><span>Estimated gross profit</span><strong>{money(report.summary.grossProfit)}</strong><small>Sales minus ingredient cost of products sold</small></section><section><div className="section-title"><h2>Profit view</h2><span>Performance</span></div><div className="money-grid"><ReportMetric label="Sales revenue" value={report.summary.revenue}/><ReportMetric label="Ingredients used" value={-report.summary.ingredientCost}/></div></section><section><div className="section-title"><h2>Cash-flow view</h2><span>Money in and out</span></div><div className="cash-card"><ReportLine label="Sales received" value={report.summary.revenue}/><ReportLine label="Ingredient purchases" value={-report.summary.purchaseSpend}/><ReportLine label="Other expenses" value={-report.summary.otherExpenses}/><ReportLine label="Net cash flow" value={report.summary.netCashFlow} total/></div></section><section><div className="section-title"><h2>Recent activity</h2><span>{activity.length} records</span></div>{activity.length ? <div className="activity-list">{activity.map((item) => <article key={`${item.label}-${item.id}`}><div><strong>{item.label}</strong><small>{item.detail} · {new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "Asia/Yangon" }).format(new Date(item.date))}</small></div><span className={item.income ? "income" : "outgoing"}>{item.income ? "+" : "−"}{money(item.amount)}</span></article>)}</div> : <p className="quiet-state">No financial activity in this period.</p>}</section></>}</div>;
+  return <div className="page reports-page"><PageHeading eyebrow="Financial account" title="Reports" onBack={onBack} backLabel={backLabel || "Back to More"} action={onBack ? <button type="button" className="text-button" onClick={onBack}>Done</button> : undefined}/><div className="tabs report-tabs"><button className={period === "today" ? "active" : ""} onClick={() => setPeriod("today")}>Today</button><button className={period === "week" ? "active" : ""} onClick={() => setPeriod("week")}>7 days</button><button className={period === "month" ? "active" : ""} onClick={() => setPeriod("month")}>30 days</button></div>{error && <p className="form-error">{error}</p>}{isLoading && !report ? <div className="report-loading">Calculating report…</div> : report && <><section className="report-hero"><span>Estimated gross profit</span><strong>{money(report.summary.grossProfit)}</strong><small>Sales minus ingredient cost of products sold</small></section><section><div className="section-title"><h2>Profit view</h2><span>Performance</span></div><div className="money-grid"><ReportMetric label="Sales revenue" value={report.summary.revenue}/><ReportMetric label="Ingredients used" value={-report.summary.ingredientCost}/></div></section><section><div className="section-title"><h2>Cash-flow view</h2><span>Money in and out</span></div><div className="cash-card"><ReportLine label="Sales received" value={report.summary.revenue}/><ReportLine label="Ingredient purchases" value={-report.summary.purchaseSpend}/><ReportLine label="Other expenses" value={-report.summary.otherExpenses}/><ReportLine label="Net cash flow" value={report.summary.netCashFlow} total/></div></section><section><div className="section-title"><h2>Recent activity</h2><span>{activity.length} records</span></div>{activity.length ? <div className="activity-list">{activity.map((item) => <article key={`${item.label}-${item.id}`}><div><strong>{item.label}</strong><small>{item.detail} · {new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "Asia/Yangon" }).format(new Date(item.date))}</small></div><span className={item.income ? "income" : "outgoing"}>{item.income ? "+" : "−"}{money(item.amount)}</span></article>)}</div> : <p className="quiet-state">No financial activity in this period.</p>}</section></>}</div>;
 }
 
 function ReportMetric({ label, value }: { label: string; value: number }) { return <article><small>{label}</small><strong className={value < 0 ? "negative" : ""}>{value < 0 ? "−" : ""}{money(Math.abs(value))}</strong></article>; }
 function ReportLine({ label, value, total = false }: { label: string; value: number; total?: boolean }) { return <div className={total ? "total" : ""}><span>{label}</span><strong className={value < 0 ? "negative" : ""}>{value < 0 ? "−" : ""}{money(Math.abs(value))}</strong></div>; }
 
 function History({ token, backLabel, onBack, onChanged }: { token: string; backLabel?: string; onBack?: () => void; onChanged: () => Promise<void> }) {
-  const [data, setData] = useState<HistoryData>(); const [filter, setFilter] = useState("all"); const [error, setError] = useState(""); const [reversing, setReversing] = useState<{ type: string; id: string; label: string }>(); const [reason, setReason] = useState(""); const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => { try { setData(await apiRequest<HistoryData>("/api/history", token)); setError(""); } catch (loadError) { setError(loadError instanceof Error ? loadError.message : "Could not load history"); } }, [token]);
-  // Transaction history is synchronized with the authenticated API here.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void load(); }, [load]);
+  const queryClient = useQueryClient();
+  const [filter, setFilter] = useState("all");
+  const [reversing, setReversing] = useState<{ type: string; id: string; label: string }>();
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["history"],
+    queryFn: () => apiRequest<HistoryData>("/api/history", token),
+  });
+
   const activities = data ? [
     ...data.sales.map((item) => ({ type: "sale", group: "sales", id: String(item.id), date: String(item.sold_at), label: "Sale", detail: `${money(Number(item.total_amount_mmk))} received`, reversed: Boolean(item.reversed_at) })),
     ...data.purchases.map((item) => ({ type: "purchase", group: "purchases", id: String(item.id), date: String(item.purchase_date), label: "Ingredient purchase", detail: `${money(Number(item.total_amount_mmk))}${item.supplier_name ? ` · ${String(item.supplier_name)}` : ""}`, reversed: Boolean(item.reversed_at) })),
@@ -3938,11 +3949,34 @@ function History({ token, backLabel, onBack, onChanged }: { token: string; backL
     ...data.expenses.map((item) => ({ type: "expense", group: "expenses", id: String(item.id), date: String(item.expense_date), label: String(item.category).replace(/^./, (letter) => letter.toUpperCase()), detail: `${money(Number(item.amount_mmk))}${item.description ? ` · ${String(item.description)}` : ""}`, reversed: Boolean(item.reversed_at) })),
     ...data.adjustments.map((item) => ({ type: "adjustment", group: "adjustments", id: String(item.id), date: String(item.occurred_at), label: "Stock adjustment", detail: `${Number(item.quantity_delta) > 0 ? "+" : ""}${Number(item.quantity_delta)} · ${String(item.note || "Count correction")}`, reversed: false })),
   ].filter((item) => filter === "all" || item.group === filter).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()) : [];
-  async function reverse() { if (!reversing || !reason.trim()) return; setBusy(true); setError(""); try { await apiRequest("/api/history", token, { method: "POST", body: JSON.stringify({ type: reversing.type, id: reversing.id, note: reason }) }); setReversing(undefined); setReason(""); await load(); await onChanged(); } catch (reverseError) { setError(reverseError instanceof Error ? reverseError.message : "Could not reverse transaction"); } finally { setBusy(false); } }
-  return <div className="page"><PageHeading eyebrow="Audit trail" title="History & corrections" onBack={onBack} backLabel={backLabel || "Back to More"} action={onBack ? <button type="button" className="text-button" onClick={onBack}>Done</button> : undefined}/><p className="helper-copy history-help">Mistakes are corrected by reversal, so the original record and the correction both remain traceable.</p><div className="filter-scroll">{[["all","All"],["sales","Sales"],["purchases","Purchases"],["bakes","Bakes"],["expenses","Expenses"],["adjustments","Adjustments"]].map(([id,label]) => <button key={id} className={filter === id ? "active" : ""} onClick={() => setFilter(id)}>{label}</button>)}</div>{error && <p className="form-error">{error}</p>}{!data ? <div className="report-loading">Loading history…</div> : activities.length ? <div className="history-list">{activities.map((item) => <article key={`${item.type}-${item.id}`} className={item.reversed ? "reversed" : ""}><div><strong>{item.label}</strong><small>{item.detail}</small><time>{new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Yangon" }).format(new Date(item.date))}</time></div>{item.reversed ? <span className="reversed-badge">Reversed</span> : item.type !== "adjustment" && <button className="text-button" onClick={() => { setReversing({ type: item.type, id: item.id, label: item.label }); setReason(""); }}>Correct</button>}</article>)}</div> : <p className="quiet-state">No records in this category.</p>}{reversing && <div className="confirm-panel"><strong>Reverse “{reversing.label}”?</strong><p>This creates opposite stock/accounting entries. It does not erase history.</p><label>Reason<input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="What was entered incorrectly?" autoFocus/></label><div><button className="text-button" onClick={() => setReversing(undefined)}>Cancel</button><button className="danger-action compact" disabled={busy || !reason.trim()} onClick={() => void reverse()}>{busy ? "Reversing…" : "Confirm reversal"}</button></div></div>}</div>;
+
+  async function reverse() {
+    if (!reversing || !reason.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      await apiRequest("/api/history", token, { method: "POST", body: JSON.stringify({ type: reversing.type, id: reversing.id, note: reason }) });
+      setReversing(undefined);
+      setReason("");
+      await queryClient.invalidateQueries({ queryKey: ["history"] });
+      await queryClient.invalidateQueries({ queryKey: ["bakery-data"] });
+      await queryClient.invalidateQueries({ queryKey: ["batches"] });
+      await queryClient.invalidateQueries({ queryKey: ["purchases"] });
+      await queryClient.invalidateQueries({ queryKey: ["expenses"] });
+      await queryClient.invalidateQueries({ queryKey: ["reports"] });
+      await onChanged();
+    } catch (reverseError) {
+      setError(reverseError instanceof Error ? reverseError.message : "Could not reverse transaction");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="page"><PageHeading eyebrow="Audit trail" title="History & corrections" onBack={onBack} backLabel={backLabel || "Back to More"} action={onBack ? <button type="button" className="text-button" onClick={onBack}>Done</button> : undefined}/><p className="helper-copy history-help">Mistakes are corrected by reversal, so the original record and the correction both remain traceable.</p><div className="filter-scroll">{[["all","All"],["sales","Sales"],["purchases","Purchases"],["bakes","Bakes"],["expenses","Expenses"],["adjustments","Adjustments"]].map(([id,label]) => <button key={id} className={filter === id ? "active" : ""} onClick={() => setFilter(id)}>{label}</button>)}</div>{error && <p className="form-error">{error}</p>}{isLoading && !data ? <div className="report-loading">Loading history…</div> : activities.length ? <div className="history-list">{activities.map((item) => <article key={`${item.type}-${item.id}`} className={item.reversed ? "reversed" : ""}><div><strong>{item.label}</strong><small>{item.detail}</small><time>{new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Yangon" }).format(new Date(item.date))}</time></div>{item.reversed ? <span className="reversed-badge">Reversed</span> : item.type !== "adjustment" && <button className="text-button" onClick={() => { setReversing({ type: item.type, id: item.id, label: item.label }); setReason(""); }}>Correct</button>}</article>)}</div> : <p className="quiet-state">No records in this category.</p>}{reversing && <div className="confirm-panel"><strong>Reverse “{reversing.label}”?</strong><p>This creates opposite stock/accounting entries. It does not erase history.</p><label>Reason<input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="What was entered incorrectly?" autoFocus/></label><div><button className="text-button" onClick={() => setReversing(undefined)}>Cancel</button><button className="danger-action compact" disabled={busy || !reason.trim()} onClick={() => void reverse()}>{busy ? "Reversing…" : "Confirm reversal"}</button></div></div>}</div>;
 }
 
 function ResetData({ email, backLabel, onCancel, onReset }: { email: string; backLabel?: string; onCancel: () => void; onReset: () => Promise<void> }) {
+  const queryClient = useQueryClient();
   const [mode, setMode] = useState<"transactions" | "everything">("transactions"); const [password, setPassword] = useState(""); const [confirmation, setConfirmation] = useState(""); const [acknowledged, setAcknowledged] = useState(false); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const phrase = mode === "transactions" ? "RESET TRANSACTIONS" : "RESET EVERYTHING";
   function selectMode(nextMode: "transactions" | "everything") { setMode(nextMode); setConfirmation(""); setAcknowledged(false); setError(""); }
@@ -3954,6 +3988,7 @@ function ResetData({ email, backLabel, onCancel, onReset }: { email: string; bac
       const { data, error: authError } = await getBrowserSupabase().auth.signInWithPassword({ email, password });
       if (authError || !data.session) throw new Error(authError?.message || "Password verification failed");
       await apiRequest("/api/reset-data", data.session.access_token, { method: "POST", body: JSON.stringify({ mode, confirmation }) });
+      queryClient.clear();
       await onReset();
     } catch (resetError) {
       setError(resetError instanceof Error ? resetError.message : "Could not reset test data");
