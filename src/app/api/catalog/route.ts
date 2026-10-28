@@ -75,3 +75,25 @@ export async function POST(request: Request) {
     return errorResponse(error);
   }
 }
+
+export async function PATCH(request: Request) {
+  try {
+    const body = await readJson(request);
+    const kind = asString(body.kind, "kind");
+    const id = asString(body.id, "id");
+    const { supabase } = await createAuthenticatedClient(request);
+    if (kind === "ingredient") {
+      const updates: Record<string, unknown> = { name: asString(body.name, "name"), low_stock_threshold: asPositiveNumber(body.lowStockThreshold ?? 0, "lowStockThreshold", true), active: body.active !== false };
+      const { error } = await supabase.from("ingredients").update(updates).eq("id", id);
+      if (error) throw new ApiError(error.message, 400);
+      return Response.json({ updated: true });
+    }
+    if (kind === "product") {
+      const updates: Record<string, unknown> = { name: asString(body.name, "name"), selling_price_mmk: asPositiveNumber(body.sellingPriceMmk ?? 0, "sellingPriceMmk", true), low_stock_threshold: asPositiveNumber(body.lowStockThreshold ?? 0, "lowStockThreshold", true), active: body.active !== false };
+      const { error } = await supabase.from("products").update(updates).eq("id", id);
+      if (error) throw new ApiError(error.message, 400);
+      return Response.json({ updated: true });
+    }
+    throw new ApiError("kind must be ingredient or product", 400);
+  } catch (error) { return errorResponse(error); }
+}

@@ -28,15 +28,16 @@ export async function GET(request: Request) {
     const { start, end, startDate, endDate } = rangeFor(period);
     const { supabase } = await createAuthenticatedClient(request);
     const [sales, costs, purchases, expenses] = await Promise.all([
-      supabase.from("sales").select("id,total_amount_mmk,payment_method,sold_at").gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString()).order("sold_at", { ascending: false }),
-      supabase.from("stock_movements").select("quantity_delta,unit_cost_mmk").eq("movement_type", "sale").gte("occurred_at", start.toISOString()).lt("occurred_at", end.toISOString()),
-      supabase.from("purchases").select("id,total_amount_mmk,purchase_date,supplier_name,note").gte("purchase_date", startDate).lte("purchase_date", endDate).order("purchase_date", { ascending: false }),
-      supabase.from("expenses").select("id,amount_mmk,expense_date,category,description").gte("expense_date", startDate).lte("expense_date", endDate).order("expense_date", { ascending: false }),
+      supabase.from("sales").select("id,total_amount_mmk,payment_method,sold_at").is("reversed_at", null).gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString()).order("sold_at", { ascending: false }),
+      supabase.from("stock_movements").select("reference_id,quantity_delta,unit_cost_mmk").eq("movement_type", "sale").gte("occurred_at", start.toISOString()).lt("occurred_at", end.toISOString()),
+      supabase.from("purchases").select("id,total_amount_mmk,purchase_date,supplier_name,note").is("reversed_at", null).gte("purchase_date", startDate).lte("purchase_date", endDate).order("purchase_date", { ascending: false }),
+      supabase.from("expenses").select("id,amount_mmk,expense_date,category,description").is("reversed_at", null).gte("expense_date", startDate).lte("expense_date", endDate).order("expense_date", { ascending: false }),
     ]);
     const failure = [sales, costs, purchases, expenses].find((result) => result.error);
     if (failure?.error) throw new ApiError(failure.error.message, 400);
     const revenue = (sales.data ?? []).reduce((sum, row) => sum + Number(row.total_amount_mmk), 0);
-    const ingredientCost = (costs.data ?? []).reduce((sum, row) => sum + Math.round(Math.abs(Number(row.quantity_delta)) * Number(row.unit_cost_mmk)), 0);
+    const activeSaleIds = new Set((sales.data ?? []).map((row) => row.id));
+    const ingredientCost = (costs.data ?? []).filter((row) => row.reference_id && activeSaleIds.has(row.reference_id)).reduce((sum, row) => sum + Math.round(Math.abs(Number(row.quantity_delta)) * Number(row.unit_cost_mmk)), 0);
     const purchaseSpend = (purchases.data ?? []).reduce((sum, row) => sum + Number(row.total_amount_mmk), 0);
     const otherExpenses = (expenses.data ?? []).reduce((sum, row) => sum + Number(row.amount_mmk), 0);
     return Response.json({

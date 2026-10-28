@@ -16,8 +16,8 @@ export async function GET(request: Request) {
     const end = new Date(start.getTime() + 86_400_000);
 
     const [sales, batches, rawStock, finishedStock] = await Promise.all([
-      supabase.from("sales").select("total_amount_mmk, sale_items(quantity)").gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString()),
-      supabase.from("production_batches").select("good_quantity, waste_quantity").gte("baked_at", start.toISOString()).lt("baked_at", end.toISOString()),
+      supabase.from("sales").select("total_amount_mmk, sale_items(quantity)").is("reversed_at", null).gte("sold_at", start.toISOString()).lt("sold_at", end.toISOString()),
+      supabase.from("production_batches").select("good_quantity, waste_quantity").is("reversed_at", null).gte("baked_at", start.toISOString()).lt("baked_at", end.toISOString()),
       supabase.from("raw_stock_levels").select("quantity, is_low"),
       supabase.from("finished_stock_levels").select("quantity, is_low"),
     ]);

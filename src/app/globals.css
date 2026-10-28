@@ -35,6 +35,7 @@ button:disabled { cursor:not-allowed; opacity:.58; }
 .page { max-width:760px; margin:0 auto; padding:25px 18px 28px; animation:enter .25s ease-out; }
 @keyframes enter { from { opacity:0; transform:translateY(4px); } }
 .page-heading { display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:22px; }
+.heading-actions { display:flex; align-items:center; gap:5px; }
 .page-heading p { margin:0 0 5px; color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.09em; }
 .page-heading h1 { margin:0; font-family:Georgia,serif; font-size:28px; line-height:1.1; font-weight:500; letter-spacing:-.7px; }
 .round-button { width:42px; height:42px; border-radius:50%; border:0; background:var(--brown); color:#fff; display:grid; place-items:center; }
@@ -84,6 +85,28 @@ button:disabled { cursor:not-allowed; opacity:.58; }
 .ingredient-input>span:last-child { width:118px; height:39px; display:flex; align-items:center; border:1px solid var(--line); border-radius:11px; background:var(--cream); overflow:hidden; }
 .ingredient-input input { min-width:0; width:100%; height:100%; border:0; outline:0; background:transparent; text-align:right; color:var(--ink); padding:0 4px 0 8px; }
 .ingredient-input em { padding-right:8px; color:var(--muted); font-size:9px; font-style:normal; }
+.helper-copy { margin:0 0 13px; color:var(--muted); font-size:10px; line-height:1.5; }
+.neutral-banner { border-color:var(--line); background:#f1ece5; color:var(--brown-dark); }
+.catalog-list,.history-list { border:1px solid var(--line); border-radius:18px; background:var(--paper); overflow:hidden; }
+.catalog-list>article,.history-list>article { padding:13px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.catalog-list>article+article,.history-list>article+article { border-top:1px solid var(--line); }
+.catalog-list article>div:first-child,.history-list article>div:first-child { min-width:0; display:grid; gap:4px; }
+.catalog-list strong,.history-list strong { font-size:12px; }
+.catalog-list small,.history-list small,.history-list time { color:var(--muted); font-size:9px; }
+.catalog-list article>div:last-child { display:flex; align-items:center; }
+.archive-button { border:0; background:none; color:#a5452f; padding:6px; font-size:10px; font-weight:700; }
+.catalog-list .catalog-edit { display:grid; align-items:stretch; }
+.catalog-edit label,.confirm-panel label { display:grid; gap:5px; color:var(--muted); font-size:10px; font-weight:700; }
+.catalog-edit input,.confirm-panel input { height:41px; width:100%; border:1px solid var(--line); border-radius:11px; background:var(--cream); color:var(--ink); padding:0 11px; }
+.catalog-edit>div,.confirm-panel>div { display:flex; justify-content:flex-end; gap:7px; }
+.filter-scroll { display:flex; gap:7px; overflow-x:auto; padding:2px 0 12px; scrollbar-width:none; }
+.filter-scroll button { flex:0 0 auto; border:1px solid var(--line); border-radius:99px; padding:8px 12px; background:var(--paper); color:var(--muted); font-size:10px; font-weight:700; }
+.filter-scroll button.active { border-color:var(--brown); background:var(--brown); color:#fff; }
+.history-help { margin-top:-12px; }
+.history-list article.reversed { opacity:.62; }
+.reversed-badge { border-radius:99px; padding:5px 8px; background:#eee8df; color:var(--muted); font-size:9px; font-weight:700; }
+.confirm-panel { position:sticky; bottom:84px; margin-top:14px; border:1px solid #efc0b5; border-radius:17px; background:var(--paper); padding:15px; box-shadow:0 14px 35px rgba(47,41,36,.17); display:grid; gap:10px; }
+.confirm-panel>strong { font-size:13px; }.confirm-panel p { margin:0; color:var(--muted); font-size:10px; line-height:1.45; }.danger-action.compact { width:auto; min-height:38px; padding:8px 11px; }
 .sign-out { width:100%; margin-top:17px; border:1px solid #d8c9b9; border-radius:13px; padding:12px; background:transparent; color:#963d29; font-size:12px; font-weight:700; }
 .form-card label small { margin-left:4px; color:#a89d92; font-weight:400; }
 .calculation-note { margin-top:-5px; border-radius:12px; background:var(--sage); padding:11px 12px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
@@ -133,4 +156,5 @@ button:disabled { cursor:not-allowed; opacity:.58; }
 .form-card .check-label input { width:17px; height:17px; flex:0 0 auto; margin:0; accent-color:var(--brown); }
 .danger-action { width:100%; min-height:49px; border:0; border-radius:12px; padding:12px 14px; background:#a9432f; color:#fff; font-size:12px; font-weight:700; }
 @media (min-width:800px) { .app-shell { display:grid; grid-template-columns:230px 1fr; }.desktop-rail { display:flex; flex-direction:column; position:sticky; top:0; height:100vh; background:var(--paper); border-right:1px solid var(--line); padding:26px 18px 20px; }.desktop-rail nav { display:grid; gap:5px; margin-top:42px; }.desktop-rail nav button { border:0; background:transparent; display:flex; align-items:center; gap:12px; padding:11px 12px; border-radius:12px; color:var(--muted); font-size:13px; text-align:left; }.desktop-rail nav button.active { background:var(--peach); color:var(--brown-dark); font-weight:700; }.rail-foot { margin-top:auto; display:flex; align-items:center; gap:10px; padding:10px; }.rail-foot div { display:grid; gap:2px; }.rail-foot strong { font-size:12px; }.rail-foot small { color:var(--muted); font-size:10px; }.topbar,.bottom-nav { display:none; }.app-content { padding-bottom:0; }.page { padding:46px 34px; }.page-heading h1 { font-size:34px; }.stat-card { padding:16px; }.stat-icon { width:44px; height:44px; }.product-grid { grid-template-columns:repeat(4,1fr); }.checkout-bar { bottom:20px; }.toast { bottom:28px; } }
+@media (max-width:480px) { .stock-page .page-heading { align-items:flex-start; }.heading-actions { flex-direction:column-reverse; align-items:flex-end; }.heading-actions .text-button { font-size:10px; }.catalog-list>article { align-items:flex-start; }.catalog-list article>div:last-child { flex-direction:column; align-items:flex-end; } }
 @media (max-width:360px) { .page { padding-left:13px; padding-right:13px; }.stat-card { padding:10px; gap:8px; }.stat-icon { width:34px; height:34px; }.quick-actions small { display:none; }.hero-card { padding:19px; } }
