@@ -66,6 +66,24 @@ type PurchaseRecord = {
     ingredients?: { id?: string; name?: string; base_unit?: string } | null;
   }>;
 };
+type SaleItemRecord = {
+  id: string;
+  product_id: string;
+  quantity: number;
+  unit_price_mmk: number;
+  products?: { id?: string; name?: string } | null;
+};
+type SaleRecord = {
+  id: string;
+  total_amount_mmk: number;
+  payment_method: string;
+  note: string | null;
+  sold_at: string;
+  reversed_at: string | null;
+  reversal_note: string | null;
+  created_at: string;
+  sale_items?: SaleItemRecord[];
+};
 type ExpenseRecord = {
   id: string;
   expense_date: string;
@@ -398,6 +416,7 @@ function BakeryApp({ session }: { session: Session }) {
       setCart({});
       showToast("Sale saved successfully");
       await refreshData();
+      await queryClient.invalidateQueries({ queryKey: ["sales"] });
       return true;
     } catch (saleError) {
       showToast(saleError instanceof Error ? saleError.message : "Sale failed");
@@ -410,7 +429,20 @@ function BakeryApp({ session }: { session: Session }) {
     <section className="app-content"><header className="topbar"><Brand/><button className="avatar-button" aria-label="Open account" onClick={() => navigate("more")}>{initials}</button></header>
       {error && <div className="global-error" role="alert">{error}<button onClick={() => void refreshData()}>Retry</button></div>}
       {view === "home" && <Dashboard data={dashboard} ingredients={ingredients} onNavigate={(v) => navigate(v, "home")}/>} 
-      {view === "sell" && <Sell products={products} cart={cart} total={cartTotal} count={cartCount} onChange={changeQuantity} onSetQuantity={setQuantity} onClearCart={clearCart} onComplete={completeSale} onCatalog={() => navigate("catalog", "sell")}/>} 
+      {view === "sell" && (
+        <Sell
+          products={products}
+          cart={cart}
+          total={cartTotal}
+          count={cartCount}
+          token={token}
+          onChange={changeQuantity}
+          onSetQuantity={setQuantity}
+          onClearCart={clearCart}
+          onComplete={completeSale}
+          onCatalog={() => navigate("catalog", "sell")}
+        />
+      )} 
       {view === "bake" && <Bake products={products} ingredients={ingredients} recipes={recipes} token={token} onCatalog={() => navigate("catalog", "bake")} onRecipes={() => navigate("recipes", "bake")} onSaved={async () => { showToast("Baking batch recorded"); await refreshData(); setStockTab("finished"); }}/>}
       {view === "stock" && <Stock tab={stockTab} onTab={setStockTab} ingredients={ingredients} finished={finishedStock} movements={movements} onPurchase={() => navigate("purchase", "stock")} onBake={() => navigate("bake", "stock")} onAdjust={() => navigate("adjust", "stock")} onCatalog={() => navigate("catalog", "stock")}/>}
       {view === "purchase" && <Purchase ingredients={ingredients} token={token} backLabel={navSource["purchase"] === "home" ? "Back to Home" : navSource["purchase"] === "more" ? "Back to More" : "Back to Stock"} onBack={() => goBack("stock")} onCancel={() => goBack("stock")} onSaved={async () => { showToast("Purchase recorded"); await refreshData(); }}/>} 
@@ -522,11 +554,25 @@ function getCashSuggestions(total: number): number[] {
   return Array.from(set).sort((a, b) => a - b).slice(0, 5);
 }
 
+const getPaymentBadge = (method: string) => {
+  switch (method) {
+    case "cash":
+      return { label: "Cash", emoji: "💵" };
+    case "mobile":
+      return { label: "Mobile / KPay", emoji: "📱" };
+    case "credit":
+      return { label: "Credit", emoji: "💳" };
+    default:
+      return { label: method.toUpperCase(), emoji: "🧾" };
+  }
+};
+
 function Sell({
   products,
   cart,
   total,
   count,
+  token,
   onChange,
   onSetQuantity,
   onClearCart,
@@ -537,14 +583,27 @@ function Sell({
   cart: Record<string, number>;
   total: number;
   count: number;
+  token?: string;
   onChange: (id: string, change: number) => void;
   onSetQuantity: (id: string, quantity: number) => void;
   onClearCart: () => void;
-  onComplete: (options: { paymentMethod: string; note?: string }) => Promise<boolean | undefined>;
+  onComplete: (options: { paymentMethod: string; note?: string; tendered?: number; change?: number }) => Promise<boolean | undefined>;
   onCatalog: () => void;
 }) {
+  const queryClient = useQueryClient();
+  const [tab, setTab] = useState<"register" | "log">("register");
   const [search, setSearch] = useState("");
+  const [logSearch, setLogSearch] = useState("");
+  const [filterMethod, setFilterMethod] = useState<string>("all");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedSale, setSelectedSale] = useState<SaleRecord | null>(null);
+
+  // Reversal states
+  const [reversing, setReversing] = useState(false);
+  const [reversalReason, setReversalReason] = useState("");
+  const [reversalBusy, setReversalBusy] = useState(false);
+  const [reversalError, setReversalError] = useState("");
+
   const [saleSuccess, setSaleSuccess] = useState<{
     total: number;
     paymentMethod: string;
@@ -552,6 +611,85 @@ function Sell({
     change?: number;
     count: number;
   } | null>(null);
+
+  // Query sales
+  const { data: sales = [], isLoading: loadingSales } = useQuery({
+    queryKey: ["sales"],
+    queryFn: async () => {
+      if (!token) return [];
+      const res = await apiRequest<{ sales: SaleRecord[] }>("/api/sales", token);
+      return res.sales || [];
+    },
+    enabled: Boolean(token),
+  });
+
+  async function handleReverseSale() {
+    if (!selectedSale || !reversalReason.trim() || !token) return;
+    setReversalBusy(true);
+    setReversalError("");
+    try {
+      await apiRequest("/api/history", token, {
+        method: "POST",
+        body: JSON.stringify({
+          type: "sale",
+          id: selectedSale.id,
+          note: reversalReason.trim(),
+        }),
+      });
+      await queryClient.invalidateQueries({ queryKey: ["sales"] });
+      await queryClient.invalidateQueries({ queryKey: ["bakery-data"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      await queryClient.invalidateQueries({ queryKey: ["reports"] });
+      await queryClient.invalidateQueries({ queryKey: ["history"] });
+      setSelectedSale(null);
+      setReversing(false);
+      setReversalReason("");
+    } catch (err) {
+      setReversalError(err instanceof Error ? err.message : "Could not reverse sale");
+    } finally {
+      setReversalBusy(false);
+    }
+  }
+
+  // Today's metrics
+  const todaySales = useMemo(() => sales.filter((s) => isToday(s.sold_at)), [sales]);
+  const todayActiveSales = useMemo(() => todaySales.filter((s) => !s.reversed_at), [todaySales]);
+  const todayRevenue = useMemo(
+    () => todayActiveSales.reduce((sum, s) => sum + (Number(s.total_amount_mmk) || 0), 0),
+    [todayActiveSales]
+  );
+  const todayItemsSold = useMemo(
+    () =>
+      todayActiveSales.reduce(
+        (sum, s) =>
+          sum +
+          (s.sale_items?.reduce((iSum, item) => iSum + (Number(item.quantity) || 0), 0) || 0),
+        0
+      ),
+    [todayActiveSales]
+  );
+
+  // Filtered sales log
+  const filteredSales = useMemo(() => {
+    return sales.filter((s) => {
+      if (filterMethod === "reversed") {
+        if (!s.reversed_at) return false;
+      } else if (filterMethod !== "all") {
+        if (s.payment_method !== filterMethod) return false;
+      }
+
+      if (logSearch.trim()) {
+        const q = logSearch.toLowerCase();
+        const noteMatch = (s.note || "").toLowerCase().includes(q);
+        const idMatch = s.id.toLowerCase().includes(q);
+        const itemMatch = s.sale_items?.some((i) =>
+          (i.products?.name || "").toLowerCase().includes(q)
+        );
+        return noteMatch || idMatch || itemMatch;
+      }
+      return true;
+    });
+  }, [sales, filterMethod, logSearch]);
 
   const visibleProducts = products.filter((product) =>
     product.name.toLowerCase().includes(search.toLowerCase())
@@ -561,158 +699,320 @@ function Sell({
     <div className="page sell-page">
       <PageHeading
         eyebrow="Point of sale"
-        title="New sale"
+        title={tab === "register" ? "New sale" : "Sales log"}
         action={
-          count > 0 ? (
+          tab === "register" ? (
+            count > 0 ? (
+              <button
+                type="button"
+                className="outline-button header-cart-pill"
+                onClick={() => setDrawerOpen(true)}
+                aria-label="View shopping cart"
+              >
+                <Icon name="bag" size={17} />
+                <span>Cart ({count})</span>
+              </button>
+            ) : undefined
+          ) : (
             <button
               type="button"
-              className="outline-button header-cart-pill"
-              onClick={() => setDrawerOpen(true)}
-              aria-label="View shopping cart"
+              className="primary-action header-cta-btn"
+              onClick={() => setTab("register")}
             >
-              <Icon name="bag" size={17} />
-              <span>Cart ({count})</span>
+              <Icon name="plus" size={16} />
+              <span>New Sale</span>
             </button>
-          ) : undefined
+          )
         }
       />
 
-      {products.length === 0 ? (
-        <EmptyState
-          title="No products yet"
-          detail="Add the breads and cakes your sister sells before recording a sale."
-          action="Add product"
-          onAction={onCatalog}
-        />
+      <div className="stock-subtabs">
+        <button
+          type="button"
+          className={tab === "register" ? "active" : ""}
+          onClick={() => setTab("register")}
+        >
+          POS Register
+        </button>
+        <button
+          type="button"
+          className={tab === "log" ? "active" : ""}
+          onClick={() => setTab("log")}
+        >
+          Sales Log {todayActiveSales.length > 0 && <small>({todayActiveSales.length})</small>}
+        </button>
+      </div>
+
+      {tab === "register" ? (
+        products.length === 0 ? (
+          <EmptyState
+            title="No products yet"
+            detail="Add the breads and cakes your sister sells before recording a sale."
+            action="Add product"
+            onAction={onCatalog}
+          />
+        ) : (
+          <>
+            <div className="search-box">
+              <span>⌕</span>
+              <input
+                aria-label="Search products"
+                placeholder="Search products by name…"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="clear-search-btn"
+                  aria-label="Clear search query"
+                  onClick={() => setSearch("")}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+
+            <div className="product-grid">
+              {visibleProducts.map((product) => {
+                const qty = cart[product.id] || 0;
+                const inCart = qty > 0;
+                const isOutOfStock = product.stock <= 0;
+
+                return (
+                  <article
+                    className={`product-card ${inCart ? "in-cart" : ""} ${isOutOfStock ? "out-of-stock" : ""}`}
+                    key={product.id}
+                  >
+                    <div className="product-photo">
+                      {product.emoji}
+                      <span className={product.stock <= 3 && product.stock > 0 ? "stock-badge low" : "stock-badge"}>
+                        {isOutOfStock ? "Sold out" : `${product.stock} left`}
+                      </span>
+                      {inCart && <span className="cart-badge-chip">{qty}</span>}
+                    </div>
+                    <div className="product-info">
+                      <div>
+                        <strong>{product.name}</strong>
+                        <small>{money(product.price)}</small>
+                      </div>
+                      {qty === 0 ? (
+                        <button
+                          type="button"
+                          className="add-product-btn"
+                          disabled={isOutOfStock}
+                          aria-label={`Add ${product.name}`}
+                          onClick={() => onChange(product.id, 1)}
+                        >
+                          <Icon name="plus" size={17} />
+                          <span>Add</span>
+                        </button>
+                      ) : (
+                        <div className="pos-stepper">
+                          <button
+                            type="button"
+                            aria-label={`Decrease ${product.name}`}
+                            onClick={() => onChange(product.id, -1)}
+                          >
+                            −
+                          </button>
+                          <input
+                            type="number"
+                            min="0"
+                            max={product.stock}
+                            inputMode="numeric"
+                            aria-label={`${product.name} quantity`}
+                            value={qty}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10);
+                              onSetQuantity(product.id, isNaN(val) ? 0 : val);
+                            }}
+                            onFocus={(e) => e.target.select()}
+                          />
+                          <button
+                            type="button"
+                            aria-label={`Increase ${product.name}`}
+                            disabled={qty >= product.stock}
+                            onClick={() => onChange(product.id, 1)}
+                          >
+                            +
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            {count > 0 && (
+              <div
+                className="checkout-bar"
+                role="button"
+                tabIndex={0}
+                onClick={() => setDrawerOpen(true)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setDrawerOpen(true);
+                  }
+                }}
+              >
+                <div className="checkout-bar-info">
+                  <span className="checkout-pill">
+                    {count} {count === 1 ? "item" : "items"} in cart
+                  </span>
+                  <strong>{money(total)}</strong>
+                </div>
+                <button
+                  className="checkout-trigger-btn"
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDrawerOpen(true);
+                  }}
+                >
+                  <span>Review Order & Pay</span>
+                  <Icon name="arrow" size={18} />
+                </button>
+              </div>
+            )}
+          </>
+        )
       ) : (
-        <>
+        /* --- SALES LOG VIEW --- */
+        <div style={{ display: "grid", gap: "16px" }}>
+          <section className="batch-stats-grid">
+            <div className="batch-stat-card">
+              <small>Today&apos;s Revenue</small>
+              <strong style={{ color: "var(--coral)" }}>{money(todayRevenue)}</strong>
+              <span>{todayActiveSales.length} sales</span>
+            </div>
+            <div className="batch-stat-card">
+              <small>Items Sold</small>
+              <strong className="positive">{todayItemsSold.toLocaleString()}</strong>
+              <span>Pieces today</span>
+            </div>
+            <div className="batch-stat-card">
+              <small>Orders</small>
+              <strong>{todaySales.length}</strong>
+              <span>
+                {todaySales.some((s) => s.reversed_at)
+                  ? `${todaySales.filter((s) => s.reversed_at).length} voided`
+                  : "All completed"}
+              </span>
+            </div>
+          </section>
+
           <div className="search-box">
             <span>⌕</span>
             <input
-              aria-label="Search products"
-              placeholder="Search products by name…"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              aria-label="Search sales log"
+              placeholder="Search by product, note, or receipt ID…"
+              value={logSearch}
+              onChange={(e) => setLogSearch(e.target.value)}
             />
-            {search && (
+            {logSearch && (
               <button
                 type="button"
                 className="clear-search-btn"
                 aria-label="Clear search query"
-                onClick={() => setSearch("")}
+                onClick={() => setLogSearch("")}
               >
                 ×
               </button>
             )}
           </div>
 
-          <div className="product-grid">
-            {visibleProducts.map((product) => {
-              const qty = cart[product.id] || 0;
-              const inCart = qty > 0;
-              const isOutOfStock = product.stock <= 0;
-
-              return (
-                <article
-                  className={`product-card ${inCart ? "in-cart" : ""} ${isOutOfStock ? "out-of-stock" : ""}`}
-                  key={product.id}
-                >
-                  <div className="product-photo">
-                    {product.emoji}
-                    <span className={product.stock <= 3 && product.stock > 0 ? "stock-badge low" : "stock-badge"}>
-                      {isOutOfStock ? "Sold out" : `${product.stock} left`}
-                    </span>
-                    {inCart && <span className="cart-badge-chip">{qty}</span>}
-                  </div>
-                  <div className="product-info">
-                    <div>
-                      <strong>{product.name}</strong>
-                      <small>{money(product.price)}</small>
-                    </div>
-                    {qty === 0 ? (
-                      <button
-                        type="button"
-                        className="add-product-btn"
-                        disabled={isOutOfStock}
-                        aria-label={`Add ${product.name}`}
-                        onClick={() => onChange(product.id, 1)}
-                      >
-                        <Icon name="plus" size={17} />
-                        <span>Add</span>
-                      </button>
-                    ) : (
-                      <div className="pos-stepper">
-                        <button
-                          type="button"
-                          aria-label={`Decrease ${product.name}`}
-                          onClick={() => onChange(product.id, -1)}
-                        >
-                          −
-                        </button>
-                        <input
-                          type="number"
-                          min="0"
-                          max={product.stock}
-                          inputMode="numeric"
-                          aria-label={`${product.name} quantity`}
-                          value={qty}
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value, 10);
-                            onSetQuantity(product.id, isNaN(val) ? 0 : val);
-                          }}
-                          onFocus={(e) => e.target.select()}
-                        />
-                        <button
-                          type="button"
-                          aria-label={`Increase ${product.name}`}
-                          disabled={qty >= product.stock}
-                          onClick={() => onChange(product.id, 1)}
-                        >
-                          +
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
+          <div className="filter-scroll">
+            {[
+              ["all", "All"],
+              ["cash", "💵 Cash"],
+              ["mobile", "📱 Mobile / KPay"],
+              ["credit", "💳 Credit"],
+              ["reversed", "Voided / Reversed"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={filterMethod === id ? "active" : ""}
+                onClick={() => setFilterMethod(id)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
-          {count > 0 && (
-            <div
-              className="checkout-bar"
-              role="button"
-              tabIndex={0}
-              onClick={() => setDrawerOpen(true)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  setDrawerOpen(true);
-                }
+          {loadingSales ? (
+            <div className="report-loading">Loading sales log…</div>
+          ) : filteredSales.length === 0 ? (
+            <EmptyState
+              title={logSearch ? "No matching orders" : "No sales recorded"}
+              detail={
+                logSearch
+                  ? "Try a different search query."
+                  : "Switch to the POS Register to record your first sale."
+              }
+              action="Open Register"
+              onAction={() => {
+                setLogSearch("");
+                setTab("register");
               }}
-            >
-              <div className="checkout-bar-info">
-                <span className="checkout-pill">
-                  {count} {count === 1 ? "item" : "items"} in cart
-                </span>
-                <strong>{money(total)}</strong>
-              </div>
-              <button
-                className="checkout-trigger-btn"
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setDrawerOpen(true);
-                }}
-              >
-                <span>Review Order & Pay</span>
-                <Icon name="arrow" size={18} />
-              </button>
-            </div>
+            />
+          ) : (
+            <section className="batch-list">
+              {filteredSales.map((sale) => {
+                const badge = getPaymentBadge(sale.payment_method);
+                const itemsCount =
+                  sale.sale_items?.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0) || 0;
+                const itemsPreview =
+                  sale.sale_items
+                    ?.map((item) => `${item.quantity}x ${item.products?.name || "Product"}`)
+                    .join(", ") || "Sale order";
+
+                return (
+                  <article
+                    key={sale.id}
+                    className={`batch-item ${sale.reversed_at ? "reversed" : ""}`}
+                    onClick={() => {
+                      setSelectedSale(sale);
+                      setReversing(false);
+                      setReversalReason("");
+                      setReversalError("");
+                    }}
+                  >
+                    <div className="batch-item-left">
+                      <span className="batch-emoji" aria-hidden="true">
+                        {badge.emoji}
+                      </span>
+                      <div className="batch-item-info">
+                        <strong>{itemsPreview}</strong>
+                        <small>
+                          {formatBatchTime(sale.sold_at)} · {badge.label} · {itemsCount} pcs
+                          {sale.note ? ` · ${sale.note}` : ""}
+                        </small>
+                      </div>
+                    </div>
+
+                    <div className="batch-item-right">
+                      <strong style={{ fontFamily: "Georgia, serif", fontSize: "14px" }}>
+                        {money(Number(sale.total_amount_mmk))}
+                      </strong>
+                      {sale.reversed_at ? (
+                        <span className="reversed-badge">Reversed</span>
+                      ) : (
+                        <span className="batch-arrow-icon">›</span>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </section>
           )}
-        </>
+        </div>
       )}
 
+      {/* Cart Drawer */}
       {drawerOpen && (
         <CartDrawer
           isOpen={drawerOpen}
@@ -740,6 +1040,7 @@ function Sell({
         />
       )}
 
+      {/* Sale Success Overlay */}
       {saleSuccess && (
         <div className="sale-success-overlay" onClick={() => setSaleSuccess(null)}>
           <div className="sale-success-card" onClick={(e) => e.stopPropagation()}>
@@ -785,9 +1086,205 @@ function Sell({
               <span>Start Next Sale</span>
               <Icon name="plus" size={18} />
             </button>
+            <button
+              type="button"
+              className="outline-button continue-shopping-btn"
+              onClick={() => {
+                setSaleSuccess(null);
+                setTab("log");
+              }}
+            >
+              View in Sales Log
+            </button>
           </div>
         </div>
       )}
+
+      {/* Receipt Detail & Reversal Drawer */}
+      {selectedSale && (() => {
+        const badge = getPaymentBadge(selectedSale.payment_method);
+        const itemCount =
+          selectedSale.sale_items?.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0) || 0;
+
+        return (
+          <div
+            className="cart-overlay"
+            onClick={() => {
+              if (!reversalBusy) setSelectedSale(null);
+            }}
+          >
+            <div
+              className="cart-drawer"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Receipt details"
+            >
+              <header className="drawer-header">
+                <div>
+                  <h2>Receipt #{selectedSale.id.slice(0, 8).toUpperCase()}</h2>
+                  <span>{formatBatchFullDate(selectedSale.sold_at)}</span>
+                </div>
+                <button
+                  type="button"
+                  className="drawer-close-btn"
+                  aria-label="Close receipt"
+                  onClick={() => setSelectedSale(null)}
+                >
+                  ✕
+                </button>
+              </header>
+
+              <div className="drawer-body batch-detail-body">
+                <div className="batch-detail-header-left">
+                  <span className="batch-detail-emoji" aria-hidden="true">
+                    {badge.emoji}
+                  </span>
+                  <div>
+                    <strong style={{ fontSize: "16px", color: "var(--ink)" }}>
+                      {badge.label} Payment
+                    </strong>
+                    <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: "2px" }}>
+                      {itemCount} {itemCount === 1 ? "piece" : "pieces"} sold
+                    </div>
+                  </div>
+                </div>
+
+                <div className="batch-detail-metrics-grid">
+                  <div className="batch-metric-box">
+                    <small>Total Paid</small>
+                    <strong style={{ color: "var(--coral)" }}>
+                      {money(Number(selectedSale.total_amount_mmk))}
+                    </strong>
+                    <span>MMK</span>
+                  </div>
+                  <div className="batch-metric-box">
+                    <small>Items Sold</small>
+                    <strong className="positive">{itemCount}</strong>
+                    <span>Pieces</span>
+                  </div>
+                  <div className="batch-metric-box">
+                    <small>Method</small>
+                    <strong style={{ fontSize: "16px" }}>{badge.label}</strong>
+                    <span>Account</span>
+                  </div>
+                </div>
+
+                {/* Itemized Sold Products */}
+                <section className="batch-detail-section">
+                  <span className="section-subhead">Itemized Order Receipt</span>
+                  <div className="batch-ingredients-table">
+                    {selectedSale.sale_items?.map((item) => {
+                      const prod = products.find((p) => p.id === item.product_id);
+                      const prodName = prod?.name || item.products?.name || "Product";
+                      const prodEmoji = prod?.emoji || "🍞";
+                      const qty = Number(item.quantity) || 0;
+                      const unitPrice = Number(item.unit_price_mmk) || 0;
+                      const lineTotal = qty * unitPrice;
+
+                      return (
+                        <div className="batch-ingredient-row" key={item.id}>
+                          <div className="batch-ing-info">
+                            <strong>
+                              {prodEmoji} {prodName}
+                            </strong>
+                            <small>
+                              {qty} pcs × {money(unitPrice)}
+                            </small>
+                          </div>
+                          <div className="batch-ing-cost">
+                            <strong>{money(lineTotal)}</strong>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {selectedSale.note && (
+                  <div className="batch-note-box">
+                    <strong>Order Note</strong>
+                    <p style={{ margin: "4px 0 0" }}>{selectedSale.note}</p>
+                  </div>
+                )}
+
+                {selectedSale.reversed_at && (
+                  <div className="batch-note-box" style={{ background: "#fae1d8", color: "#963d29" }}>
+                    <strong>Sale Voided / Reversed</strong>
+                    <p style={{ margin: "4px 0 0", fontSize: "11px" }}>
+                      {selectedSale.reversal_note
+                        ? `Reason: “${selectedSale.reversal_note}”`
+                        : "Reversed via accounting correction."}
+                    </p>
+                  </div>
+                )}
+
+                {!selectedSale.reversed_at && (
+                  <div style={{ marginTop: "8px" }}>
+                    {!reversing ? (
+                      <button
+                        type="button"
+                        className="text-button batch-reverse-trigger"
+                        onClick={() => setReversing(true)}
+                      >
+                        Need to void or reverse this sale?
+                      </button>
+                    ) : (
+                      <div className="confirm-panel" style={{ margin: 0 }}>
+                        <strong>Void and reverse this sale?</strong>
+                        <p>
+                          This restores product inventory to stock and reverses the sales revenue entry.
+                        </p>
+                        <label>
+                          Reason for voiding
+                          <input
+                            value={reversalReason}
+                            onChange={(e) => setReversalReason(e.target.value)}
+                            placeholder="e.g. Customer returned items, cashier error"
+                            autoFocus
+                          />
+                        </label>
+                        {reversalError && <p className="form-error">{reversalError}</p>}
+                        <div>
+                          <button
+                            type="button"
+                            className="text-button"
+                            disabled={reversalBusy}
+                            onClick={() => {
+                              setReversing(false);
+                              setReversalReason("");
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-action compact"
+                            disabled={reversalBusy || !reversalReason.trim()}
+                            onClick={() => void handleReverseSale()}
+                          >
+                            {reversalBusy ? "Voiding…" : "Confirm Void"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <footer className="drawer-footer">
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={() => setSelectedSale(null)}
+                >
+                  Close Receipt
+                </button>
+              </footer>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
